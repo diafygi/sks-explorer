@@ -1,5 +1,7 @@
 #SKS Explorer
 
+**NOTE: THIS PROJECT IS NOT COMPLETE YET**
+
 Demo: https://research.daylightpirates.org/sks-explorer
 
 This is a project that allows you explore the SKS keyserver pool
