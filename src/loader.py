@@ -1,50 +1,71 @@
 import sys
 import json
+from hashlib import sha256
 
 # sks-explorer specific imports
 import models
 
-def load_keys_from_dict(keys_dict_list, dry_run=False):
-    """Load a list of keys into the database."""
+def load_keys_from_json(keys_json_list, dry_run=False):
+    """Load a list of json keys into the database."""
     results = {
         "saved": [],
         "skipped": [],
         "updated": [],
         "no_fingerprint": [],
     }
-    for i, k in enumerate(keys_dict_list):
+    for i, kjson in enumerate(keys_json_list):
         if (i+1) % 500 == 0:
             sys.stderr.write("Read {} keys...\n".format(i+1))
+        k = json.loads(kjson)
 
         # skip keys that don't have fingerprints
         # TODO: lookup by json hash and save it anyway
-        if k.get("fingerprint", None) is None:
+        if not k.get("fingerprint"):
             results['no_fingerprint'].append(k)
             continue
 
         # see if this key's fingerprint is already in the database
         existing_keys = models.PublicKey.query.filter_by(fingerprint=k['fingerprint']).all()
         if len(existing_keys) > 0:
+            # TODO: check to see if an update is needed
             results['skipped'].append(k['fingerprint'])
 
         # the key is not in the database so save it
         else:
             if not dry_run:
-                new_key = models.PublicKey(
+
+                # get user ids and subkey fingerprints for the search string
+                subkeys = u""
+                userids = u""
+                for p in k.get("packets", []):
+                    if p['tag_name'] == "Public-Subkey" and p.get("fingerprint"):
+                        subkeys += u" {}".format(p['fingerprint'])
+                    elif p['tag_name'] == "User ID" and p.get("user_id"):
+                        userids += u" {}".format(p['user_id'])
+
+                # build the search string
+                search_string = u"{fingerprint}{subkeys} |{userids}".format(
                     fingerprint=k['fingerprint'],
-                    long_key_id=k['key_id'],
-                    short_key_id=k['key_id'][-8:],
+                    subkeys=subkeys,
+                    userids=userids,
+                )
+
+                # save the new key
+                new_key = models.PublicKey(
+                    search_string=search_string,
+                    fingerprint=k['fingerprint'],
+                    key_id=k['key_id'],
+                    json_hash=sha256(kjson).hexdigest(),
+                    json_obj=dict((i, j) for i, j in k.items() if i != "packets"),
                 )
                 models.db.session.add(new_key)
                 models.db.session.commit()
 
+                # TODO: insert other rows (userid, subkey, etc.)
+
             results['saved'].append(k['fingerprint'])
 
     return results
-
-def load_keys_from_json(keys_json_list, dry_run=False):
-    keys_dict_list = [json.loads(k) for k in keys_json_list]
-    return load_keys_from_dict(keys_dict_list, dry_run=dry_run)
 
 if __name__ == "__main__":
     """
