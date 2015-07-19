@@ -15,24 +15,129 @@ def load_keys_from_json(keys_json_list, dry_run=False):
         if (i+1) % 500 == 0:
             sys.stderr.write("Read {} keys...\n".format(i+1))
 
+        # calculate hash of full public key
+        k = json.loads(kjson)
+        full_raw = k['packet_raw'].decode("hex")
+        for p in k.get("packets", []):
+            full_raw += p['packet_raw'].decode("hex")
+        full_sha512 = sha512(full_raw).hexdigest()
+
         # skip unchanged full public key packets
-        json_sha512 = sha512(kjson).hexdigest()
-        unchanged_keys = models.PublicKey.query.filter_by(json_sha512=json_sha512).all()
+        unchanged_keys = models.PublicKey.query.filter_by(full_sha512=full_sha512).all()
         if len(unchanged_keys) > 0:
-            results['skipped'].append(json_sha512)
+            results['skipped'].append(full_sha512)
             continue
 
         # see if there's a public key that needs to be updated
-        k = json.loads(kjson)
-        pub_obj = dict((i, j) for i, j in k.items() if i != "packets")
-        pub_sha512 = sha512(json.dumps(pub_obj, sort_keys=True)).hexdigest()
-        existing_keys = models.PublicKey.query.filter_by(pub_sha512=pub_sha512).all()
+        pub_sha512 = sha512(k['packet_raw'].decode("hex")).hexdigest()
+        existing_keys = models.PublicKey.query.filter_by(packet_sha512=pub_sha512).all()
 
         # update existing keys
         if len(existing_keys) > 0:
-            # TODO: actually update the key
-            results['updated'].append(json_sha512)
-            continue
+            for existing_key in existing_keys:
+                """
+                This section compares existing packets for public keys
+                to the new packets using a reference dictionary with
+                concatinated hashes of the packets used as keys. This
+                allows for easy comparison of what has changed in the
+                full public key so only the changes need to be saved.
+
+                existing_packets = {
+                    "userid|<userid_packet_sha512>": <UserID object>,
+                    "userid|<userid_packet_sha512>|<signature_packet_sha512>": <Signature object>,
+                    ...
+                }
+
+                new_packets = {
+                    "userid|<userid_packet_sha512>": <packet_json_dict>,
+                    "userid|<userid_packet_sha512>|<signature_packet_sha512>": <packet_json_dict>,
+                    ...
+                }
+                """
+
+                # signatures directly on the public key
+                existing_packets = {}
+                for sig in models.Signature.query.filter_by(publickey=existing_key.id).all():
+                    existing_packets["publickeys|{}|{}".format(pub_sha512, sig.packet_sha512)] = sig
+
+                # subkeys and their signatures
+                for subkey in models.SubKey.query.filter_by(publickey=existing_key.id).all():
+                    existing_packets["subkey|{}".format(subkey.packet_sha512)] = subkey
+                    for sig in models.Signature.query.filter_by(subkey=subkey.id).all():
+                        existing_packets["subkey|{}|{}".format(subkey.packet_sha512, sig.packet_sha512)] = sig
+
+                # user ids and their signatures
+                for userid in models.UserID.query.filter_by(publickey=existing_key.id).all():
+                    existing_packets["userid|{}".format(userid.packet_sha512)] = userid
+                    for sig in models.Signature.query.filter_by(userid=userid.id).all():
+                        existing_packets["userid|{}|{}".format(userid.packet_sha512, sig.packet_sha512)] = sig
+
+                # user attributes and their signatures
+                for userattribute in models.UserAttribute.query.filter_by(publickey=existing_key.id).all():
+                    existing_packets["userattribute|{}".format(userattribute.packet_sha512)] = userattribute
+                    for sig in models.Signature.query.filter_by(userattribute=userattribute.id).all():
+                        existing_packets["userattribute|{}|{}".format(userattribute.packet_sha512, sig.packet_sha512)] = sig
+
+                # build new packets reference
+                new_packets = {}
+                i = 0
+                while i < len(k.get("packets", [])):
+
+                    # signatures directly on the public key
+                    if k['packets'][i]['tag_name'] == "Signature":
+                        sig_sha512 = sha512(k['packets'][i]['packet_raw'].decode("hex")).hexdigest()
+                        new_packets["publickey|{}|{}".format(pub_sha512, sig_sha512)] = k['packets'][i]
+                        i += 1
+
+                    # subkey and signatures
+                    elif k['packets'][i]['tag_name'] == "Public-Subkey":
+                        subkey_sha512 = sha512(k['packets'][i]['packet_raw'].decode("hex")).hexdigest()
+                        new_packets["subkey|{}".format(subkey_sha512)] = k['packets'][i]
+                        i += 1
+                        while k['packets'][i]['tag_name'] == "Signature":
+                            sig_sha512 = sha512(k['packets'][i]['packet_raw'].decode("hex")).hexdigest()
+                            new_packets["subkey|{}|{}".format(subkey_sha512, sig_sha512)] = k['packets'][i]
+                            i += 1
+
+                    # user id and signatures
+                    elif k['packets'][i]['tag_name'] == "User ID":
+                        userid_sha512 = sha512(k['packets'][i]['packet_raw'].decode("hex")).hexdigest()
+                        new_packets["userid|{}".format(userid_sha512)] = k['packets'][i]
+                        i += 1
+                        while k['packets'][i]['tag_name'] == "Signature":
+                            sig_sha512 = sha512(k['packets'][i]['packet_raw'].decode("hex")).hexdigest()
+                            new_packets["userid|{}|{}".format(userid_sha512, sig_sha512)] = k['packets'][i]
+                            i += 1
+
+                    # user attribute and signatures
+                    elif k['packets'][i]['tag_name'] == "User Attribute":
+                        userattribute_sha512 = sha512(k['packets'][i]['packet_raw'].decode("hex")).hexdigest()
+                        new_packets["userattribute|{}".format(userattribute_sha512)] = k['packets'][i]
+                        i += 1
+                        while k['packets'][i]['tag_name'] == "Signature":
+                            sig_sha512 = sha512(k['packets'][i]['packet_raw'].decode("hex")).hexdigest()
+                            new_packets["userattribute|{}|{}".format(userattribute_sha512, sig_sha512)] = k['packets'][i]
+                            i += 1
+
+                    # unrecognized packet type, so skip (shouldn't happen)
+                    else:
+                        i += 1
+
+                # add packets that are new
+                packets_matching = set(new_packets.keys()).intersection(set(existing_packets.keys()))
+                for key, p in new_packets.items():
+                    if key not in packets_matching:
+                        # TODO: insert packets
+                        pass
+
+                # remove packets that are obsolete
+                for key, p in existing_packets.items():
+                    if key not in packets_matching:
+                        models.db.session.delete(p)
+                        models.db.session.commit()
+
+                results['updated'].append(full_sha512)
+                continue
 
         # the key is not in the database so save it
         else:
@@ -57,8 +162,8 @@ def load_keys_from_json(keys_json_list, dry_run=False):
                 # create the new key
                 new_key = models.PublicKey(
                     search_string=search_string,
-                    json_sha512=json_sha512,
-                    pub_sha512=pub_sha512,
+                    full_sha512=full_sha512,
+                    packet_sha512=pub_sha512,
                     json_raw=kjson,
                 )
 
@@ -73,7 +178,7 @@ def load_keys_from_json(keys_json_list, dry_run=False):
 
                 # TODO: insert other rows (userid, subkey, etc.)
 
-            results['saved'].append(json_sha512)
+            results['saved'].append(full_sha512)
 
     return results
 
