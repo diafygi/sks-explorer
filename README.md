@@ -30,13 +30,15 @@ sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE sks_explorer_db TO sk
 export SQLALCHEMY_DATABASE_URI="postgresql://sks_explorer_user:<sks_explorer_pass>@localhost/sks_explorer_db"
 
 # 6. Download and import the latest sql dump.
-wget https://research.daylightpirates.org/sks-dumps/latest/sql/sks-dump.sql -O /tmp/sks-dump.sql
-sudo -u postgres psql sks_explorer_db < /tmp/sks-dump.sql
+venv/bin/python -c "import src.models; src.models.db.drop_all();"
+wget https://research.daylightpirates.org/sks-dumps/latest/sql/sks-dump.postgresql -O /tmp/sks-dump.postgresql
+sudo -u postgres psql sks_explorer_db < /tmp/sks-dump.postgresql
 
 # 6 (alt). Alternatively, download the json dump and use the loader script.
+venv/bin/python -c "import src.models; src.models.db.drop_all();"
 venv/bin/python -c "import src.models; src.models.db.create_all();"
 wget -r -np -nH --cut-dirs=3 -R index.html -P /tmp/sks-json/ https://research.daylightpirates.org/sks-dumps/latest/json/
-find /tmp/sks-json/ -name "*.json.gz" | xargs -I% sh -c "zcat % | venv/bin/python src/loader.py"
+venv/bin/python src/loader.py "/tmp/sks-json/*.json.gz"
 
 # 7. Start up the website!
 venv/bin/python src/views.py
