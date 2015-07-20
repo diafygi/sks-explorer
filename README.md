@@ -11,7 +11,7 @@ via web interface.
 
 ```sh
 # 1. Install git, PostgreSQL, python, and virtualenv.
-sudo apt-get install git postgresql pos python python-virtualenv
+sudo apt-get install git postgresql libpq-dev python-dev python-virtualenv
 
 # 2. Clone this repo.
 git clone https://github.com/diafygi/sks-explorer.git
