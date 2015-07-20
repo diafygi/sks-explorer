@@ -1,3 +1,7 @@
+"""
+These are the dynamic website pages for sks-explorer.
+"""
+
 import os
 from sqlalchemy import func
 from flask import Flask, render_template

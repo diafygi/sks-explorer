@@ -1,3 +1,7 @@
+"""
+These are the tables for the database for the sks-explorer app.
+"""
+
 import os
 from flask.ext.sqlalchemy import SQLAlchemy
 
@@ -16,7 +20,8 @@ class PublicKey(db.Model):
     search_string = db.Column(db.Text, index=True)
     fingerprint = db.Column(db.String(40), index=True)
     key_id = db.Column(db.String(16), index=True)
-    json_raw = db.Column(db.Text())
+    full_json = db.Column(db.Text())
+    packet_json = db.Column(db.Text())
 
 class SubKey(db.Model):
     __tablename__ = "subkey"
@@ -25,24 +30,28 @@ class SubKey(db.Model):
     publickey = db.Column(db.ForeignKey("publickey.id"), index=True)
     fingerprint = db.Column(db.String(40), index=True)
     key_id = db.Column(db.String(16), index=True)
+    packet_json = db.Column(db.Text())
 
 class UserID(db.Model):
     __tablename__ = "userid"
     id = db.Column(db.Integer, primary_key=True)
     packet_sha512 = db.Column(db.String(128), index=True)
     publickey = db.Column(db.ForeignKey("publickey.id"), index=True)
+    user_id = db.Column(db.Text())
+    packet_json = db.Column(db.Text())
 
 class UserAttribute(db.Model):
     __tablename__ = "userattribute"
     id = db.Column(db.Integer, primary_key=True)
     packet_sha512 = db.Column(db.String(128), index=True)
     publickey = db.Column(db.ForeignKey("publickey.id"), index=True)
+    packet_json = db.Column(db.Text())
 
 class Image(db.Model):
     __tablename__ = "image"
     id = db.Column(db.Integer, primary_key=True)
-    packet_sha512 = db.Column(db.String(128), index=True)
-    publickey = db.Column(db.ForeignKey("userattribute.id"), index=True)
+    userattribute = db.Column(db.ForeignKey("userattribute.id"), index=True)
+    image = db.Column(db.LargeBinary())
 
 class Signature(db.Model):
     __tablename__ = "signature"
@@ -56,4 +65,5 @@ class Signature(db.Model):
     signer_publickey = db.Column(db.ForeignKey("publickey.id"), index=True)
     signer_subkey = db.Column(db.ForeignKey("subkey.id"), index=True)
     is_valid = db.Column(db.Boolean)
+    packet_json = db.Column(db.Text())
 
